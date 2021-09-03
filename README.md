@@ -25,3 +25,11 @@ Reads given input directories and encodes .mkv files with [HandBreak](https://ha
 | -c | --check-interval-seconds | How long to wait between checking for new files in seconds. | 300 |
 |  | --help | Print help information |  |
 | -V | --version | Print version information |  |
+
+## Running with Docker
+```sh
+docker run \
+    -v 'HOST_INPUT_DIR:/app/input' \
+    -v 'HOST_OUTPUT_DIR:/app/output' \
+    ghcr.io/santerihetekivi/encoder:master
+```

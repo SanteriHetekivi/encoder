@@ -14,3 +14,6 @@ RUN rustup target add i686-unknown-linux-gnu
 
 # Target 64-bit Linux (kernel 2.6.32+, glibc 2.11+).
 RUN rustup target add x86_64-unknown-linux-gnu
+
+# Target 64-bit Linux with MUSL.
+RUN rustup target add x86_64-unknown-linux-musl

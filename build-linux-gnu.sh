@@ -14,3 +14,8 @@ cargo build \
 cargo build \
     --release \
     --target=x86_64-unknown-linux-gnu
+
+# 64-bit Linux with MUSL
+cargo build \
+    --release \
+    --target=x86_64-unknown-linux-musl

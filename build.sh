@@ -19,18 +19,24 @@ cp \
     target/x86_64-apple-darwin/release/encoder \
     release/encoder_x86_64-apple-darwin &&
 
-# Build 32-bit and 64-bit Linux.
+# Build 32-bit, 64-bit GNU and 64-bit MUSL for Linux.
 docker run \
     --rm \
     --user "$(id -u)":"$(id -g)" \
     -v "$PWD":/usr/src/myapp \
     -w /usr/src/myapp \
     -t \
-    rust-multilib:1630663612 \
+    ghcr.io/santerihetekivi/rust-multilib:master \
     ./build-linux-gnu.sh &&
 cp \
     target/i686-unknown-linux-gnu/release/encoder \
     release/encoder_i686-unknown-linux-gnu &&
+cp \
+    target/x86_64-unknown-linux-gnu/release/encoder \
+    release/encoder_x86_64-unknown-linux-gnu &&
+cp \
+    target/x86_64-unknown-linux-musl/release/encoder \
+    release/encoder_x86_64-unknown-linux-musl &&
 
 # Build ARM64 Linux (kernel 4.2, glibc 2.17+).
 #cargo build --release --target=aarch64-unknown-linux-gnu &&
