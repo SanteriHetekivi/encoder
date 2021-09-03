@@ -8,15 +8,24 @@ use std::{fs, thread, time};
 // Path for building and storing paths.
 use std::path::{Path, PathBuf};
 
-// Operating system strings for storing them.
-use std::ffi::OsStr;
-
 // Command for running commands and Stdio for output.
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
+
+// Generate custom error.
+use std::error::Error;
+use std::fmt;
+#[derive(Debug)]
+struct MyError(String);
+impl fmt::Display for MyError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "There is an error: {}", self.0)
+    }
+}
+impl Error for MyError {}
 
 // Clamp config for command line arguments.
 #[derive(Clap)]
-#[clap(version = "1.0", author = "Santeri Hetekivi <santeri@hetekivi.com>")]
+#[clap(version = "1.0.1", author = "Santeri Hetekivi <santeri@hetekivi.com>")]
 #[clap(setting = AppSettings::ColoredHelp)]
 // Command line arguments struct.
 struct Opts {
@@ -59,7 +68,7 @@ struct EncodeJob {
 /// Get encode job data.
 ///
 /// Return result with optional EncodeJob struct;
-fn get_encode_job() -> Result<Option<EncodeJob>, std::io::Error> {
+fn get_encode_job() -> Result<Option<EncodeJob>, Box<dyn Error>> {
     // Init input and preset paths.
     let mut input_path: Option<PathBuf>;
     let mut preset_path: Option<PathBuf>;
@@ -72,7 +81,16 @@ fn get_encode_job() -> Result<Option<EncodeJob>, std::io::Error> {
     for entry in fs::read_dir(input_dirs_path)? {
         // Get path for entry.
         let path: PathBuf = entry?.path();
-        println!("\tReading entry {:?}...", path.file_name().unwrap());
+        println!(
+            "\tReading entry {}...",
+            match path.file_name() {
+                Some(os_filename) => match os_filename.to_str() {
+                    Some(filename) => filename,
+                    None => "TRANSFORMING_OS_FILENAME_TO_STR_FAILED",
+                },
+                None => "GETTING_OS_FILENAME_FAILED",
+            }
+        );
 
         // If entry is not directory
         if !path.is_dir() {
@@ -93,9 +111,36 @@ fn get_encode_job() -> Result<Option<EncodeJob>, std::io::Error> {
             // Get path
             let sub_path = sub_entry?.path();
             // and filename from entry.
-            let file_name: &str = sub_path.file_name().unwrap().to_str().unwrap();
+            let file_name: String = match (match sub_path.file_name() {
+                // Succeeded to get filename from input file.
+                Some(input_file_name) => input_file_name,
+                // Failed to get filename from input file!
+                None => {
+                    return Err(Box::new(MyError(
+                        "Failed to get filename from PathBug sub_path!".into(),
+                    )));
+                }
+            })
+            .to_str()
+            {
+                // Succeeded to transform input filename to str.
+                Some(input_file_name) => input_file_name.into(),
+                // Failed to transform input filename to str!
+                None => {
+                    return Err(Box::new(MyError(
+                        "Failed to transform PathBuf sub_path to str!".into(),
+                    )));
+                }
+            };
             println!("\t\t\tReading entry {}...", file_name);
-            let extension: Option<&OsStr> = sub_path.extension();
+            // Get extension as String.
+            let extension: String = match sub_path.extension() {
+                Some(os_path) => match os_path.to_str() {
+                    Some(string) => string.into(),
+                    None => "".into(),
+                },
+                None => "".into(),
+            };
 
             // If entry was not file
             if !sub_path.is_file() {
@@ -106,31 +151,36 @@ fn get_encode_job() -> Result<Option<EncodeJob>, std::io::Error> {
             // If entry was preset file
             else if file_name == "preset.json" {
                 println!("\t\t\t\tWas preset file!");
+                match input_path {
+                    // If input path also found
+                    Some(input_path) => {
+                        // Return with EncodeJob data.
+                        return Ok(Some(EncodeJob {
+                            input: input_path,
+                            preset: sub_path,
+                        }));
+                    }
+                    None => {}
+                }
                 // set preset file.
                 preset_path = Some(sub_path);
-
-                // If input path also found
-                if input_path.is_some() {
-                    // Return with EncodeJob data.
-                    return Ok(Some(EncodeJob {
-                        input: input_path.unwrap(),
-                        preset: preset_path.unwrap(),
-                    }));
-                }
             }
             // If entry was mkv file, so input file
-            else if extension.is_some() && extension.unwrap() == "mkv" {
+            else if extension == "mkv" {
                 println!("\t\t\t\tWas input file!");
                 // set input path.
-                input_path = Some(sub_path);
-                // If preset path also found
-                if preset_path.is_some() {
-                    // Return with EncodeJob data.
-                    return Ok(Some(EncodeJob {
-                        input: input_path.unwrap(),
-                        preset: preset_path.unwrap(),
-                    }));
+                match preset_path {
+                    // If preset path also found
+                    Some(preset_path) => {
+                        // Return with EncodeJob data.
+                        return Ok(Some(EncodeJob {
+                            input: sub_path,
+                            preset: preset_path,
+                        }));
+                    }
+                    None => {}
                 }
+                input_path = Some(sub_path);
             }
             // File was not preset or input -file.
             else {
@@ -153,66 +203,129 @@ fn get_encode_job() -> Result<Option<EncodeJob>, std::io::Error> {
 /// * `input_file` - PatBuf of input file to use.
 ///
 /// Return empty result or String error.
-fn encode(preset_file: PathBuf, input_file: PathBuf) -> Result<(), String> {
+fn encode(preset_file: PathBuf, input_file: PathBuf) -> Result<(), Box<dyn Error>> {
     // Parse command line arguments.
     let opts: Opts = Opts::parse();
     // Get input file name.
-    let input_file_name: &str = input_file.file_name().unwrap().to_str().unwrap();
-    // Get output directory path.
-    let output_dir_path: String = opts.output_dir_path;
+    let input_file_name: &str = match (match input_file.file_name() {
+        // Succeeded to get filename from input file.
+        Some(input_file_name) => input_file_name,
+        // Failed to get filename from input file!
+        None => {
+            return Err(Box::new(MyError(
+                "Failed to get filename from PathBug input_file_name!".into(),
+            )));
+        }
+    })
+    .to_str()
+    {
+        // Succeeded to transform input filename to str.
+        Some(string) => string,
+        // Failed to transform input filename to str!
+        None => {
+            return Err(Box::new(MyError(
+                "Failed to transform PathBuf input_file_name to str!".into(),
+            )));
+        }
+    };
     // Generate output path buffer from output directory path and input filename.
-    let output_path_buffer: PathBuf = Path::new(&output_dir_path).join(input_file_name);
-    let output: &str = output_path_buffer.to_str().unwrap();
+    let output_path_buffer: PathBuf = Path::new(&opts.output_dir_path).join(input_file_name);
+    let output: &str = match output_path_buffer.to_str() {
+        // Succeeded to transform input filename to str.
+        Some(string) => string,
+        // Failed to transform input filename to str!
+        None => {
+            return Err(Box::new(MyError(
+                "Failed to transform PathBuf output_path_buffer to str!".into(),
+            )));
+        }
+    };
     // If output file already exits.
-    if output_path_buffer.is_file() {
+    if output_path_buffer.clone().is_file() {
         // return error.
-        return Err(format!("Output path is already file '{}'!", output));
+        return Err(Box::new(MyError(format!(
+            "Output path is already file '{}'!",
+            output
+        ))));
     }
 
     // Start to encode with given file.
     println!("Starting to encode file {}...", input_file_name);
     // Run command and get result.
-    let result = Command::new(opts.hand_brake_cli_cmd)
+    let result: ExitStatus = match (match Command::new(opts.hand_brake_cli_cmd)
         .arg("--preset-import-file")
-        .arg(preset_file.to_str().unwrap())
+        .arg(match preset_file.to_str() {
+            // Succeeded to transform input filename to str.
+            Some(string) => string,
+            // Failed to transform input filename to str!
+            None => {
+                return Err(Box::new(MyError(
+                    "Failed to transform PathBuf preset_file to str!".into(),
+                )));
+            }
+        })
         .arg("-i")
-        .arg(input_file.to_str().unwrap())
+        .arg(match input_file.to_str() {
+            // Succeeded to transform input filename to str.
+            Some(string) => string,
+            // Failed to transform input filename to str!
+            None => {
+                return Err(Box::new(MyError(
+                    "Failed to transform PathBuf input_file to str!".into(),
+                )));
+            }
+        })
         .arg("-o")
         .arg(output)
         .stdout(Stdio::inherit())
         .spawn()
-        .unwrap()
-        .wait()
-        .unwrap();
+    {
+        Ok(child) => child,
+        Err(err) => return Err(Box::new(err)),
+    })
+    .wait()
+    {
+        Ok(result) => result,
+        Err(err) => return Err(Box::new(err)),
+    };
     // If command failed
     if !result.success() {
         // return error.
-        return Err(format!(
-            "Encoding failed with code {}!",
-            result.code().unwrap()
-        ));
+        match result.code() {
+            Some(code) => {
+                return Err(Box::new(MyError(format!(
+                    "Encoding failed with code {}!",
+                    code
+                ))));
+            }
+            None => {
+                return Err(Box::new(MyError("Encoding failed without code!".into())));
+            }
+        }
     }
     // If no output file was not generated!
     else if !output_path_buffer.is_file() {
         // return error.
-        return Err(format!(
+        return Err(Box::new(MyError(format!(
             "Encoding did not produce output file '{}'!",
             output
-        ));
+        ))));
     }
     // Encoding succeeded.
     println!("Encoding succeeded!");
 
     // Remove input file.
-    fs::remove_file(input_file).unwrap();
+    match fs::remove_file(input_file) {
+        Ok(ok) => ok,
+        Err(error) => return Err(Box::new(error)),
+    }
     println!("Input file removed!");
 
     // Return success.
     return Ok(());
 }
 
-// Main loop.
-fn main() -> std::io::Result<()> {
+fn run() -> Result<(), Box<dyn Error>> {
     // Get sleep seconds from command line argument.
     let sleep_seconds: i32 = Opts::parse().check_interval_seconds;
     // Generate sleep duration from sleep interval seconds.
@@ -220,18 +333,33 @@ fn main() -> std::io::Result<()> {
     // Loop indefinitely.
     loop {
         // Get encode job data.
-        let encode_job: Option<EncodeJob> = get_encode_job()?;
-        // Data found.
-        if encode_job.is_some() {
-            let encode_job: EncodeJob = encode_job.unwrap();
-            // Start encoding with the data.
-            encode(encode_job.preset, encode_job.input).unwrap();
+        match get_encode_job()? {
+            // Data found.
+            Some(encode_job) => {
+                // Start encoding with the data.
+                encode(encode_job.preset, encode_job.input)?;
+            }
+            // No data found.
+            None => {
+                // Sleep for given duration before next check.
+                println!("Sleeping {} seconds...", sleep_seconds);
+                thread::sleep(sleep_duration);
+            }
         }
-        // No data found.
-        else {
-            // Sleep for given duration before next check.
-            println!("Sleeping {} seconds...", sleep_seconds);
-            thread::sleep(sleep_duration);
+    }
+}
+
+// Main function
+fn main() {
+    // Run
+    match run() {
+        Ok(_) => {
+            println!("Done!");
+            std::process::exit(exitcode::OK);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(exitcode::DATAERR);
         }
     }
 }
